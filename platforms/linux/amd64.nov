@@ -1,35 +1,22 @@
 // ---------------------------------------------------------------------------
-// file_io/linux_arm64 - File I/O for Linux ARM64 (aarch64)
-// ARM64 Linux has no open/mkdir/unlink/chmod/access/rename syscalls.
-// Uses openat/mkdirat/unlinkat/fchmodat/faccessat/renameat with AT_FDCWD.
-// AT_FDCWD = -100 (0xFFFFFF9C)
+// file_io/linux_amd64 - File I/O for Linux x86_64
+// Linux syscall convention: rax=syscall#, rdi/rsi/rdx/r10/r8/r9=args
 // ---------------------------------------------------------------------------
 
-module file_io_linux_arm64;
+module file_io_linux_amd64;
 
-import ../std;
-
-// ---------------------------------------------------------------------------
-// AT_FDCWD helper
-// ---------------------------------------------------------------------------
-
-fn at_fdcwd() -> i32 {
-    return 0 - 100;
-}
 
 // ---------------------------------------------------------------------------
 // File descriptor operations
-// Uses openat(AT_FDCWD, path, flags, mode) instead of open()
 // ---------------------------------------------------------------------------
 
 fn file_open(path: str, flags: i32, mode: i32) -> i32 {
-    mov(x0, at_fdcwd());  // AT_FDCWD
-    mov(x1, path);
-    mov(x2, flags);
-    mov(x3, mode);
-    mov(x8, 56);       // SYS_openat
+    mov(rax, 2);       // SYS_open
+    mov(rdi, path);
+    mov(rsi, flags);
+    mov(rdx, mode);
     syscall();
-    return u64_to_i32(getreg(x0));
+    return u64_to_i32(getreg(rax));
 }
 
 fn file_open_read(path: str) -> i32 {
@@ -42,27 +29,27 @@ fn file_open_write(path: str) -> i32 {
 }
 
 fn file_close(fd: i32) -> void {
-    mov(x0, fd);
-    mov(x8, 57);       // SYS_close
+    mov(rax, 3);       // SYS_close
+    mov(rdi, fd);
     syscall();
 }
 
 fn file_read(fd: i32, buf_addr: u64, count: i32) -> i32 {
-    mov(x0, fd);
-    mov(x1, buf_addr);
-    mov(x2, count);
-    mov(x8, 63);       // SYS_read
+    mov(rax, 0);       // SYS_read
+    mov(rdi, fd);
+    mov(rsi, buf_addr);
+    mov(rdx, count);
     syscall();
-    return u64_to_i32(getreg(x0));
+    return u64_to_i32(getreg(rax));
 }
 
 fn file_write(fd: i32, buf_addr: u64, count: i32) -> i32 {
-    mov(x0, fd);
-    mov(x1, buf_addr);
-    mov(x2, count);
-    mov(x8, 64);       // SYS_write
+    mov(rax, 1);       // SYS_write
+    mov(rdi, fd);
+    mov(rsi, buf_addr);
+    mov(rdx, count);
     syscall();
-    return u64_to_i32(getreg(x0));
+    return u64_to_i32(getreg(rax));
 }
 
 fn file_write_str(fd: i32, s: str) -> i32 {
@@ -70,12 +57,12 @@ fn file_write_str(fd: i32, s: str) -> i32 {
 }
 
 fn file_seek(fd: i32, offset: u64, whence: i32) -> i64 {
-    mov(x0, fd);
-    mov(x1, offset);
-    mov(x2, whence);
-    mov(x8, 62);       // SYS_lseek
+    mov(rax, 8);       // SYS_lseek
+    mov(rdi, fd);
+    mov(rsi, offset);
+    mov(rdx, whence);
     syscall();
-    return getreg(x0);
+    return getreg(rax);
 }
 
 fn file_size(fd: i32) -> u64 {
@@ -87,15 +74,13 @@ fn file_size(fd: i32) -> u64 {
 
 // ---------------------------------------------------------------------------
 // Pipe helpers
-// ARM64 Linux has no pipe() — uses pipe2(fds, 0) (syscall 59)
-// ARM64 Linux has no dup2() — uses dup3(old, new, 0) (syscall 24)
+// Linux pipe() stores fds in memory buffer, not registers
 // ---------------------------------------------------------------------------
 
 fn pipe_create(res: []i32) -> void {
     let pipebuf: str = "\0\0\0\0\0\0\0\0";
-    mov(x0, pipebuf);
-    mov(x1, 0);        // flags = 0
-    mov(x8, 59);       // SYS_pipe2
+    mov(rax, 22);      // SYS_pipe
+    mov(rdi, pipebuf);
     syscall();
     let pb: u64 = ptr(pipebuf);
     res[0] = load32(pb);
@@ -103,15 +88,14 @@ fn pipe_create(res: []i32) -> void {
 }
 
 fn dup2(oldfd: i32, newfd: i32) -> void {
-    mov(x0, oldfd);
-    mov(x1, newfd);
-    mov(x2, 0);        // flags = 0
-    mov(x8, 24);       // SYS_dup3
+    mov(rax, 33);      // SYS_dup2
+    mov(rdi, oldfd);
+    mov(rsi, newfd);
     syscall();
 }
 
 // ---------------------------------------------------------------------------
-// Path manipulation (pure Novus — identical to all platforms)
+// Path manipulation (pure Novus — identical to Darwin)
 // ---------------------------------------------------------------------------
 
 fn path_ext(path: str) -> str {
@@ -177,49 +161,39 @@ fn path_basename(path: str) -> str {
 
 // ---------------------------------------------------------------------------
 // Directory & permission helpers
-// Uses mkdirat(AT_FDCWD, path, mode) instead of mkdir()
-// Uses fchmodat(AT_FDCWD, path, mode) instead of chmod()
-// Uses faccessat(AT_FDCWD, path, mode, 0) instead of access()
-// Uses unlinkat(AT_FDCWD, path, 0) instead of unlink()
 // ---------------------------------------------------------------------------
 
 fn sys_mkdir(path: str, mode: i32) -> i32 {
-    mov(x0, at_fdcwd());  // AT_FDCWD
-    mov(x1, path);
-    mov(x2, mode);
-    mov(x8, 34);       // SYS_mkdirat
+    mov(rax, 83);      // SYS_mkdir
+    mov(rdi, path);
+    mov(rsi, mode);
     syscall();
-    return u64_to_i32(getreg(x0));
+    return u64_to_i32(getreg(rax));
 }
 
 fn sys_chmod(path: str, mode: i32) -> i32 {
-    mov(x0, at_fdcwd());  // AT_FDCWD
-    mov(x1, path);
-    mov(x2, mode);
-    mov(x8, 53);       // SYS_fchmodat
+    mov(rax, 90);      // SYS_chmod
+    mov(rdi, path);
+    mov(rsi, mode);
     syscall();
-    return u64_to_i32(getreg(x0));
+    return u64_to_i32(getreg(rax));
 }
 
 fn file_exists(path: str) -> bool {
-    mov(x0, at_fdcwd());  // AT_FDCWD
-    mov(x1, path);
-    mov(x2, 0);        // F_OK
-    mov(x3, 0);        // flags
-    mov(x8, 48);       // SYS_faccessat
+    mov(rax, 21);      // SYS_access
+    mov(rdi, path);
+    mov(rsi, 0);       // F_OK
     syscall();
-    let result: i32 = u64_to_i32(getreg(x0));
+    let result: i32 = u64_to_i32(getreg(rax));
     if (result == 0) { return true; }
     return false;
 }
 
 fn file_delete(path: str) -> i32 {
-    mov(x0, at_fdcwd());  // AT_FDCWD
-    mov(x1, path);
-    mov(x2, 0);        // flags = 0 (not AT_REMOVEDIR)
-    mov(x8, 35);       // SYS_unlinkat
+    mov(rax, 87);      // SYS_unlink
+    mov(rdi, path);
     syscall();
-    return u64_to_i32(getreg(x0));
+    return u64_to_i32(getreg(rax));
 }
 
 // ---------------------------------------------------------------------------
@@ -269,25 +243,25 @@ fn file_append(path: str, content: str) -> i32 {
 
 // ---------------------------------------------------------------------------
 // Memory-mapped file I/O
-// mmap: x0=addr, x1=len, x2=prot, x3=flags, x4=fd, x5=offset
+// mmap: rdi=addr, rsi=len, rdx=prot, r10=flags, r8=fd, r9=offset
 // ---------------------------------------------------------------------------
 
 fn file_mmap_read(fd: i32, size: u64) -> u64 {
-    mov(x0, 0);        // addr = NULL
-    mov(x1, size);     // length
-    mov(x2, 1);        // PROT_READ
-    mov(x3, 2);        // MAP_PRIVATE
-    mov(x4, fd);
-    mov(x5, 0);        // offset
-    mov(x8, 222);      // SYS_mmap
+    mov(rax, 9);       // SYS_mmap
+    mov(rdi, 0);       // addr = NULL
+    mov(rsi, size);    // length
+    mov(rdx, 1);       // PROT_READ
+    mov(r10, 2);       // MAP_PRIVATE
+    mov(r8, fd);
+    mov(r9, 0);        // offset
     syscall();
-    return getreg(x0);
+    return getreg(rax);
 }
 
 fn file_munmap(addr: u64, size: u64) -> void {
-    mov(x0, addr);
-    mov(x1, size);
-    mov(x8, 215);      // SYS_munmap
+    mov(rax, 11);      // SYS_munmap
+    mov(rdi, addr);
+    mov(rsi, size);
     syscall();
 }
 
@@ -296,25 +270,22 @@ fn file_munmap(addr: u64, size: u64) -> void {
 // ---------------------------------------------------------------------------
 
 fn file_chdir(path: str) -> i32 {
-    mov(x0, path);
-    mov(x8, 49);       // SYS_chdir
+    mov(rax, 80);      // SYS_chdir
+    mov(rdi, path);
     syscall();
-    return u64_to_i32(getreg(x0));
+    return u64_to_i32(getreg(rax));
 }
 
 // ---------------------------------------------------------------------------
 // Rename / move a file
-// Uses renameat(AT_FDCWD, old, AT_FDCWD, new) instead of rename()
 // ---------------------------------------------------------------------------
 
 fn file_rename(old_path: str, new_path: str) -> i32 {
-    mov(x0, at_fdcwd());  // AT_FDCWD (olddirfd)
-    mov(x1, old_path);
-    mov(x2, at_fdcwd());  // AT_FDCWD (newdirfd)
-    mov(x3, new_path);
-    mov(x8, 38);       // SYS_renameat
+    mov(rax, 82);      // SYS_rename
+    mov(rdi, old_path);
+    mov(rsi, new_path);
     syscall();
-    return u64_to_i32(getreg(x0));
+    return u64_to_i32(getreg(rax));
 }
 
 // ---------------------------------------------------------------------------

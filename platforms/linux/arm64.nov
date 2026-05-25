@@ -1,20 +1,32 @@
 // ---------------------------------------------------------------------------
-// file_io/darwin_arm64 - File I/O for macOS Apple Silicon
+// file_io/linux_arm64 - File I/O for Linux ARM64 (aarch64)
+// ARM64 Linux has no open/mkdir/unlink/chmod/access/rename syscalls.
+// Uses openat/mkdirat/unlinkat/fchmodat/faccessat/renameat with AT_FDCWD.
+// AT_FDCWD = -100 (0xFFFFFF9C)
 // ---------------------------------------------------------------------------
 
-module file_io_darwin_arm64;
+module file_io_linux_arm64;
 
-import ../std;
+
+// ---------------------------------------------------------------------------
+// AT_FDCWD helper
+// ---------------------------------------------------------------------------
+
+fn at_fdcwd() -> i32 {
+    return 0 - 100;
+}
 
 // ---------------------------------------------------------------------------
 // File descriptor operations
+// Uses openat(AT_FDCWD, path, flags, mode) instead of open()
 // ---------------------------------------------------------------------------
 
 fn file_open(path: str, flags: i32, mode: i32) -> i32 {
-    mov(x0, path);
-    mov(x1, flags);
-    mov(x2, mode);
-    mov(x16, 0x2000005);
+    mov(x0, at_fdcwd());  // AT_FDCWD
+    mov(x1, path);
+    mov(x2, flags);
+    mov(x3, mode);
+    mov(x8, 56);       // SYS_openat
     syscall();
     return u64_to_i32(getreg(x0));
 }
@@ -24,12 +36,13 @@ fn file_open_read(path: str) -> i32 {
 }
 
 fn file_open_write(path: str) -> i32 {
-    return file_open(path, 1537, 420);
+    // O_WRONLY=1 | O_CREAT=0x40 | O_TRUNC=0x200 = 0x241 = 577
+    return file_open(path, 577, 420);
 }
 
 fn file_close(fd: i32) -> void {
     mov(x0, fd);
-    mov(x16, 0x2000006);
+    mov(x8, 57);       // SYS_close
     syscall();
 }
 
@@ -37,7 +50,7 @@ fn file_read(fd: i32, buf_addr: u64, count: i32) -> i32 {
     mov(x0, fd);
     mov(x1, buf_addr);
     mov(x2, count);
-    mov(x16, 0x2000003);
+    mov(x8, 63);       // SYS_read
     syscall();
     return u64_to_i32(getreg(x0));
 }
@@ -46,7 +59,7 @@ fn file_write(fd: i32, buf_addr: u64, count: i32) -> i32 {
     mov(x0, fd);
     mov(x1, buf_addr);
     mov(x2, count);
-    mov(x16, 0x2000004);
+    mov(x8, 64);       // SYS_write
     syscall();
     return u64_to_i32(getreg(x0));
 }
@@ -59,7 +72,7 @@ fn file_seek(fd: i32, offset: u64, whence: i32) -> i64 {
     mov(x0, fd);
     mov(x1, offset);
     mov(x2, whence);
-    mov(x16, 0x20000C7);
+    mov(x8, 62);       // SYS_lseek
     syscall();
     return getreg(x0);
 }
@@ -73,26 +86,31 @@ fn file_size(fd: i32) -> u64 {
 
 // ---------------------------------------------------------------------------
 // Pipe helpers
+// ARM64 Linux has no pipe() — uses pipe2(fds, 0) (syscall 59)
+// ARM64 Linux has no dup2() — uses dup3(old, new, 0) (syscall 24)
 // ---------------------------------------------------------------------------
 
 fn pipe_create(res: []i32) -> void {
-    mov(x16, 0x200002A);
+    let pipebuf: str = "\0\0\0\0\0\0\0\0";
+    mov(x0, pipebuf);
+    mov(x1, 0);        // flags = 0
+    mov(x8, 59);       // SYS_pipe2
     syscall();
-    let rfd: i32 = u64_to_i32(getreg(x0));
-    let wfd: i32 = u64_to_i32(getreg(x1));
-    res[0] = rfd;
-    res[1] = wfd;
+    let pb: u64 = ptr(pipebuf);
+    res[0] = load32(pb);
+    res[1] = load32(pb + 4);
 }
 
 fn dup2(oldfd: i32, newfd: i32) -> void {
     mov(x0, oldfd);
     mov(x1, newfd);
-    mov(x16, 0x200005A);
+    mov(x2, 0);        // flags = 0
+    mov(x8, 24);       // SYS_dup3
     syscall();
 }
 
 // ---------------------------------------------------------------------------
-// Path manipulation
+// Path manipulation (pure Novus — identical to all platforms)
 // ---------------------------------------------------------------------------
 
 fn path_ext(path: str) -> str {
@@ -158,28 +176,36 @@ fn path_basename(path: str) -> str {
 
 // ---------------------------------------------------------------------------
 // Directory & permission helpers
+// Uses mkdirat(AT_FDCWD, path, mode) instead of mkdir()
+// Uses fchmodat(AT_FDCWD, path, mode) instead of chmod()
+// Uses faccessat(AT_FDCWD, path, mode, 0) instead of access()
+// Uses unlinkat(AT_FDCWD, path, 0) instead of unlink()
 // ---------------------------------------------------------------------------
 
 fn sys_mkdir(path: str, mode: i32) -> i32 {
-    mov(x0, path);
-    mov(x1, mode);
-    mov(x16, 0x2000088);
+    mov(x0, at_fdcwd());  // AT_FDCWD
+    mov(x1, path);
+    mov(x2, mode);
+    mov(x8, 34);       // SYS_mkdirat
     syscall();
     return u64_to_i32(getreg(x0));
 }
 
 fn sys_chmod(path: str, mode: i32) -> i32 {
-    mov(x0, path);
-    mov(x1, mode);
-    mov(x16, 0x200000F);
+    mov(x0, at_fdcwd());  // AT_FDCWD
+    mov(x1, path);
+    mov(x2, mode);
+    mov(x8, 53);       // SYS_fchmodat
     syscall();
     return u64_to_i32(getreg(x0));
 }
 
 fn file_exists(path: str) -> bool {
-    mov(x0, path);
-    mov(x1, 0);
-    mov(x16, 0x2000021);
+    mov(x0, at_fdcwd());  // AT_FDCWD
+    mov(x1, path);
+    mov(x2, 0);        // F_OK
+    mov(x3, 0);        // flags
+    mov(x8, 48);       // SYS_faccessat
     syscall();
     let result: i32 = u64_to_i32(getreg(x0));
     if (result == 0) { return true; }
@@ -187,8 +213,10 @@ fn file_exists(path: str) -> bool {
 }
 
 fn file_delete(path: str) -> i32 {
-    mov(x0, path);
-    mov(x16, 0x200000A);
+    mov(x0, at_fdcwd());  // AT_FDCWD
+    mov(x1, path);
+    mov(x2, 0);        // flags = 0 (not AT_REMOVEDIR)
+    mov(x8, 35);       // SYS_unlinkat
     syscall();
     return u64_to_i32(getreg(x0));
 }
@@ -226,12 +254,12 @@ fn write_file(path: str, content: str) -> i32 {
 }
 
 // ---------------------------------------------------------------------------
-// Append a string to a file (creates if doesn't exist)
-// O_WRONLY=1 | O_CREAT=0x200 | O_APPEND=0x0008 = 0x209 = 521
+// Append a string to a file
+// O_WRONLY=1 | O_CREAT=0x40 | O_APPEND=0x400 = 0x441 = 1089
 // ---------------------------------------------------------------------------
 
 fn file_append(path: str, content: str) -> i32 {
-    let fd: i32 = file_open(path, 521, 420);
+    let fd: i32 = file_open(path, 1089, 420);
     if (fd < 0) { return -1; }
     file_write_str(fd, content);
     file_close(fd);
@@ -240,16 +268,17 @@ fn file_append(path: str, content: str) -> i32 {
 
 // ---------------------------------------------------------------------------
 // Memory-mapped file I/O
+// mmap: x0=addr, x1=len, x2=prot, x3=flags, x4=fd, x5=offset
 // ---------------------------------------------------------------------------
 
 fn file_mmap_read(fd: i32, size: u64) -> u64 {
-    mov(x0, 0);        // addr = NULL (let kernel choose)
+    mov(x0, 0);        // addr = NULL
     mov(x1, size);     // length
     mov(x2, 1);        // PROT_READ
     mov(x3, 2);        // MAP_PRIVATE
     mov(x4, fd);
     mov(x5, 0);        // offset
-    mov(x16, 0x20000C5);  // SYS_mmap
+    mov(x8, 222);      // SYS_mmap
     syscall();
     return getreg(x0);
 }
@@ -257,7 +286,7 @@ fn file_mmap_read(fd: i32, size: u64) -> u64 {
 fn file_munmap(addr: u64, size: u64) -> void {
     mov(x0, addr);
     mov(x1, size);
-    mov(x16, 0x2000049);  // SYS_munmap
+    mov(x8, 215);      // SYS_munmap
     syscall();
 }
 
@@ -267,31 +296,31 @@ fn file_munmap(addr: u64, size: u64) -> void {
 
 fn file_chdir(path: str) -> i32 {
     mov(x0, path);
-    mov(x16, 0x200000C);  // SYS_chdir = 12
+    mov(x8, 49);       // SYS_chdir
     syscall();
     return u64_to_i32(getreg(x0));
 }
 
 // ---------------------------------------------------------------------------
 // Rename / move a file
+// Uses renameat(AT_FDCWD, old, AT_FDCWD, new) instead of rename()
 // ---------------------------------------------------------------------------
 
 fn file_rename(old_path: str, new_path: str) -> i32 {
-    mov(x0, old_path);
-    mov(x1, new_path);
-    mov(x16, 0x2000080);  // SYS_rename = 128
+    mov(x0, at_fdcwd());  // AT_FDCWD (olddirfd)
+    mov(x1, old_path);
+    mov(x2, at_fdcwd());  // AT_FDCWD (newdirfd)
+    mov(x3, new_path);
+    mov(x8, 38);       // SYS_renameat
     syscall();
     return u64_to_i32(getreg(x0));
 }
 
 // ---------------------------------------------------------------------------
-// Stat helpers — check if path is a directory
-// Uses access() with F_OK, then tries to open as directory
+// Stat helpers
 // ---------------------------------------------------------------------------
 
 fn dir_exists(path: str) -> bool {
-    // Try stat: SYS_stat64 = 338 on macOS
-    // Simplified: check if the path exists and is accessible
     let result: bool = file_exists(path);
     return result;
 }
